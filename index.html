@@ -1428,6 +1428,27 @@ body.has-data .opt-it.need-data{display:flex}
 .m-tbl.mN td.mtd-today{background:var(--cream)}
 .m-tbl.mN .mdot{color:var(--gl)}
 .m-tbl.mN .dr-inp{width:38px}
+/* Chips de planta */
+.pl-chips{display:flex;gap:7px;align-items:center;flex-wrap:nowrap;overflow-x:auto;padding:2px 2px 8px;margin-bottom:6px;-webkit-overflow-scrolling:touch;scrollbar-width:thin}
+.pl-lbl{flex:none;font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--gm)}
+.pl-chip{flex:none;font-family:var(--fn);font-size:12px;font-weight:700;color:var(--go);background:var(--wh);border:1.5px solid var(--bd);border-radius:20px;padding:7px 13px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.pl-chip b{font-size:10px;font-weight:800;background:var(--gb);color:var(--gm);border-radius:10px;padding:1px 7px}
+.pl-chip:hover{border-color:var(--na);color:var(--na)}
+.pl-chip.on{background:var(--na);border-color:var(--na);color:#fff}
+.pl-chip.on b{background:rgba(255,255,255,.25);color:#fff}
+/* Selector múltiple de plantas */
+.msel-wrap{position:relative;display:inline-block}
+.msel-btn{cursor:pointer;text-align:left}
+.msel-panel{display:none;position:absolute;left:0;top:calc(100% + 6px);min-width:240px;max-height:320px;overflow:auto;background:var(--wh);border:1px solid var(--bd);border-radius:12px;box-shadow:var(--sh2);padding:6px;z-index:240}
+.msel-panel.open{display:block}
+.msel-head{display:flex;justify-content:space-between;align-items:center;font-size:9.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--gl);padding:6px 9px 4px}
+.msel-row{display:flex;align-items:center;gap:9px;padding:8px 9px;border-radius:8px;cursor:pointer;font-size:12.5px;font-weight:600;color:var(--bk)}
+.msel-row:hover{background:var(--gb)}
+.msel-row.on{background:var(--na1);color:var(--na2)}
+.msel-row input{accent-color:var(--na);width:15px;height:15px;flex:none}
+.msel-nm{flex:1;min-width:0}
+.msel-row b{font-size:10px;font-weight:800;background:var(--gb);color:var(--gm);border-radius:10px;padding:1px 7px}
+.msel-row.on b{background:var(--na);color:#fff}
 /* Explicador simple */
 .in-expl{font-size:11px;line-height:1.6;color:var(--go);background:var(--cream);border:1px solid #F3D9C4;border-radius:10px;padding:10px 13px;margin-top:10px}
 /* Curva S compacta + tabla numérica */
@@ -1613,7 +1634,10 @@ body.has-data .opt-it.need-data{display:flex}
       <span class="seg vseg"><button class="seg-b" id="vm-cuadros" onclick="setVMode('cuadros')">▦ Cuadros</button><button class="seg-b" id="vm-lista" onclick="setVMode('lista')">≡ Lista</button></span>
       <div class="sw"><span class="si">🔍</span><input class="sb" id="sq" placeholder="Buscar actividad, OT, ejecutor…" oninput="render()"><button class="mic" id="mic-sq" onclick="voiceSearch('sq')" title="Buscar por voz">🎤</button></div>
       <select class="fsel" id="f-disc" onchange="setFilter('disc',this.value)"></select>
-      <select class="fsel" id="f-loc" onchange="setFilter('loc',this.value)"></select>
+      <span class="msel-wrap">
+        <button type="button" class="fsel msel-btn" id="f-loc-btn" onclick="togglePlantaSel(event)">🏭 Toda planta</button>
+        <div class="msel-panel" id="f-loc-panel"></div>
+      </span>
       <select class="fsel" id="f-crit" onchange="setFilter('crit',this.value)">
         <option value="">Toda criticidad</option><option value="CRITICO">🔴 Críticas</option><option value="IMPORTANTE">Importantes</option><option value="NORMAL">Normales</option>
       </select>
@@ -2019,7 +2043,7 @@ function setWeekSlot(i){
   try{clearTimeout(_sv);save();}catch(e){}
   WSLOT=i;DATA=d;
   var sv=Store.get('edits_s'+DATA.semana,{});EDITS=(sv&&typeof sv==='object')?sv:{};
-  PPTINFO={};FLT='';CHFLT={type:null,val:null};FILT={disc:'',loc:'',crit:'',estado:''};DIA_INIT=false;
+  PPTINFO={};FLT='';CHFLT={type:null,val:null};FILT={disc:'',loc:[],crit:'',estado:'',planta:''};DIA_INIT=false;
   loadHandovers();loadActions();loadNotifs();loadNP();mergeNP();
   loadPpt();if(typeof initOTcrit==='function')initOTcrit();if(typeof mergePpt==='function')mergePpt();
   document.body.classList.toggle('wk-next',WSLOT===1);
@@ -2070,7 +2094,7 @@ var DATA=null, EDITS={}, FLT='', CHFLT={type:null,val:null}, editId=null, pendin
 /* ── Doble semana: slot 0 = semana en curso · slot 1 = semana siguiente (foco preparativos) ── */
 var WSLOT=0, UP_SLOT=null;
 function dataKey(sl){var i=(sl===undefined)?WSLOT:sl;return i===1?'data_next':'data';}
-var FILT={disc:'',loc:'',crit:'',estado:''};
+var FILT={disc:'',loc:[],crit:'',estado:'',planta:''};
 var LOC_MAP={}, LOC_LABELS={};
 var DAYS=['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'];
 var DSHORT=['LUN','MAR','MIÉ','JUE','VIE','SÁB','DOM'];
@@ -2659,7 +2683,7 @@ function recargar(force){
   if(force!==true&&histGuard())return;
   if(force!==true&&!requireAdmin())return;
   var _cleared=WSLOT;
-  DATA=null;FLT='';FILT={disc:'',loc:'',crit:'',estado:''};CHFLT={type:null,val:null};PPTINFO={};Store.del(dataKey());
+  DATA=null;FLT='';FILT={disc:'',loc:[],crit:'',estado:'',planta:''};CHFLT={type:null,val:null};PPTINFO={};Store.del(dataKey());
   var _other=Store.get(dataKey(_cleared===1?0:1),null);
   if(_other&&_other.secs&&Array.isArray(_other.secs)){
     WSLOT=_cleared===1?0:1;DATA=_other;
@@ -2680,22 +2704,44 @@ function recargar(force){
 function refreshAll(){if(!DATA)return;render();if(TAB==='plani')renderPlaniInd();if(TAB==='indicadores')renderIndicadores();}
 function updTabCount(){}
 /* ── Filters ── */
+/* ── Planta de una actividad (para el filtro y los gráficos) ── */
+function plantaOf(a){
+  var p=ct2(a.planta||'');if(p)return p;
+  var ar=ct2(a.area||'');var i=ar.indexOf('·');
+  if(i>0)return ct2(ar.slice(0,i));
+  return dispArea(a)||'Sin planta';
+}
+function plantaFilter(a){var L=FILT.loc;if(!L||!L.length)return true;return L.indexOf(plantaOf(a))>=0;}
+/* Desplegable de plantas con selección múltiple */
+function plantaCounts(){var m={},o=[];allActs().forEach(function(a){var p=plantaOf(a);if(m[p]===undefined){m[p]=0;o.push(p);}m[p]++;});o.sort(function(x,y){return m[y]-m[x]||x.localeCompare(y);});return {m:m,o:o};}
+function plantaLbl(){var L=FILT.loc||[];if(!L.length)return '🏭 Toda planta';if(L.length===1)return '🏭 '+L[0];return '🏭 '+L.length+' plantas';}
+function buildPlantaSel(){
+  var btn=document.getElementById('f-loc-btn');if(btn)btn.textContent=plantaLbl();
+  var pn=document.getElementById('f-loc-panel');if(!pn||!DATA)return;
+  var pc=plantaCounts(),L=FILT.loc||[];
+  pn.innerHTML='<div class="msel-head"><span>Plantas</span><button class="notif-mark" onclick="plantaClear()">Todas</button></div>'
+    +pc.o.map(function(p){var on=L.indexOf(p)>=0;
+      return '<label class="msel-row'+(on?' on':'')+'"><input type="checkbox"'+(on?' checked':'')+' onchange="plantaTog('+jsArg(p)+')"><span class="msel-nm">'+esc(p)+'</span><b>'+pc.m[p]+'</b></label>';}).join('');
+}
+function plantaTog(p){var L=FILT.loc=FILT.loc||[];var i=L.indexOf(p);if(i>=0)L.splice(i,1);else L.push(p);
+  buildPlantaSel();updFclear();if(TAB==='plani')renderPlaniInd();render();}
+function plantaClear(){FILT.loc=[];buildPlantaSel();updFclear();if(TAB==='plani')renderPlaniInd();render();}
+function togglePlantaSel(ev){if(ev)ev.stopPropagation();var pn=document.getElementById('f-loc-panel');if(pn){buildPlantaSel();pn.classList.toggle('open');}}
+document.addEventListener('click',function(ev){var pn=document.getElementById('f-loc-panel');if(pn&&pn.classList.contains('open')&&!ev.target.closest('.msel-wrap'))pn.classList.remove('open');});
 function buildChips(){
   buildLocStandard();
   var disc={},loc={};
   allActs().forEach(function(a){if(a.disc)disc[a.disc]=true;var g=normLoc(a.area);if(g)loc[g]=true;});
   var ds=document.getElementById('f-disc');
   if(ds){ds.innerHTML='<option value="">Toda disciplina</option>'+Object.keys(disc).sort().map(function(d){return '<option value="'+esc(d)+'">'+esc(d)+'</option>';}).join('');ds.value=FILT.disc;}
-  var ls=document.getElementById('f-loc');
-  if(ls){var gl=Object.keys(loc).sort(function(a,b){return (LOC_LABELS[a]||a).localeCompare(LOC_LABELS[b]||b);});
-    ls.innerHTML='<option value="">Toda ubicación</option>'+gl.map(function(g){return '<option value="'+esc(g)+'">📍 '+esc(LOC_LABELS[g]||g)+'</option>';}).join('');ls.value=FILT.loc;}
+  buildPlantaSel();
   var cs=document.getElementById('f-crit');if(cs)cs.value=FILT.crit;
   var es=document.getElementById('f-estado');if(es)es.value=FILT.estado;
   updFclear();
 }
-function setFilter(k,v){FILT[k]=v;updFclear();render();}
-function clearFilters(){FILT={disc:'',loc:'',crit:'',estado:''};CHFLT={type:null,val:null};['f-disc','f-loc','f-crit','f-estado'].forEach(function(id){var e=document.getElementById(id);if(e)e.value='';});updFclear();render();}
-function updFclear(){var n=(FILT.disc?1:0)+(FILT.loc?1:0)+(FILT.crit?1:0)+(FILT.estado?1:0)+(CHFLT.type?1:0);var b=document.getElementById('fclear');if(b)b.classList.toggle('act',n>0);}
+function setFilter(k,v){FILT[k]=v;updFclear();if(k==='loc'&&TAB==='plani')renderPlaniInd();render();}
+function clearFilters(){FILT={disc:'',loc:[],crit:'',estado:'',planta:''};CHFLT={type:null,val:null};['f-disc','f-crit','f-estado'].forEach(function(id){var e=document.getElementById(id);if(e)e.value='';});buildPlantaSel();updFclear();if(TAB==='plani')renderPlaniInd();render();}
+function updFclear(){var n=(FILT.disc?1:0)+((FILT.loc&&FILT.loc.length)?1:0)+(FILT.crit?1:0)+(FILT.estado?1:0)+(CHFLT.type?1:0);var b=document.getElementById('fclear');if(b)b.classList.toggle('act',n>0);}
 function passChFilter(a){
   if(!CHFLT.type)return true;
   switch(CHFLT.type){
@@ -2739,8 +2785,9 @@ function estadoOf(a){if(isCancel(a))return 'Cancelada';return ed(a.id).estEj||'S
 
 function match(a,q,ignoreDia){
   if(!ignoreDia&&!inDia(a))return false;
+  if(!plantaFilter(a))return false;
   if(FILT.disc&&a.disc!==FILT.disc)return false;
-  if(FILT.loc&&normLoc(a.area)!==FILT.loc)return false;
+  if(!plantaFilter(a))return false;
   if(FILT.crit&&critOf(a)!==FILT.crit)return false;
   if(FILT.estado==='__quiebre'){if(!isQuiebre(a)&&!ed(a.id).impacto)return false;}
   else if(FILT.estado&&estadoOf(a)!==FILT.estado)return false;
@@ -3767,7 +3814,7 @@ function parseMGA(wb,filename){
     var disc=sg?colv(seg,sg,['DISCIPLINA']):'';if(!disc)disc=/^1(\.|$)/.test(id)?'PIPING':'INFRAESTRUCTURA';
     var planta=sg?colv(seg,sg,['PLANTA']):'';
     var resp=sg?colv(seg,sg,['RESPONSABLE']):'';
-    var a={id:id,nombre:nombre,area:(area||planta)+(sector?' · '+sector:''),ejec:ejec||(sg?colv(seg,sg,['EJECUTOR']):''),crit:'',sup:'',origen:'PL',ot:'',
+    var a={id:id,nombre:nombre,planta:(area||planta),area:(area||planta)+(sector?' · '+sector:''),ejec:ejec||(sg?colv(seg,sg,['EJECUTOR']):''),crit:'',sup:'',origen:'PL',ot:'',
       dp:dp,dr0:dp.map(function(){return 0;}),hp:hp,disc:disc,
       winIni:dIdxOf(row[8],false),winFin:dIdxOf(row[9],true)};
     if(!secMap[disc]){secMap[disc]={id:String(secs.length+1),nombre:disc,actividades:[]};secs.push(secMap[disc]);}
@@ -4006,7 +4053,7 @@ var DISC_CLR=['#E55302','#0098AA','#2E9E5B','#F4AA00','#C13832','#7B5EA7','#3642
 var DISC_MODE='graf';
 function discMode(m){DISC_MODE=m;renderPlaniInd();}
 function renderBar(boxId){
-  var rows=DATA.secs.map(function(s){var tp=0;s.actividades.forEach(function(a){tp+=totPlan(a);});return {nombre:s.nombre,tp:tp,act:s.actividades.length};}).filter(function(r){return r.act>0;}).sort(function(a,b){return b.tp-a.tp;});
+  var rows=DATA.secs.map(function(s){var tp=0,n=0;s.actividades.forEach(function(a){if(!plantaFilter(a))return;n++;tp+=totPlan(a);});return {nombre:s.nombre,tp:tp,act:n};}).filter(function(r){return r.act>0;}).sort(function(a,b){return b.tp-a.tp;});
   var box=document.getElementById(boxId||'bar-disc');if(!box)return;
   if(!rows.length){box.innerHTML='<div class="empty">Sin datos</div>';return;}
   if(DISC_MODE==='num'){
@@ -4025,7 +4072,7 @@ function renderBar(boxId){
 /* ── Daily strip ── */
 function renderDayStrip(boxId){
   var tdp=zeros(),tdr=zeros();
-  allActs().forEach(function(a){var rd=realDot(a);for(var d=0;d<ND();d++){tdp[d]+=a.dp[d];tdr[d]+=rd[d];}});
+  allActs().filter(plantaFilter).forEach(function(a){var rd=realDot(a);for(var d=0;d<ND();d++){tdp[d]+=a.dp[d];tdr[d]+=rd[d];}});
   var h='';for(var d=0;d<ND();d++){var p=tdp[d],rl=tdr[d];var clr=rl>=p&&p>0?'var(--ve)':rl>0?'var(--am)':'transparent';var rclr=rl>=p&&p>0?'var(--ve)':rl>0?'#8A6600':'var(--gl)';
     h+='<div class="day-c" style="border-bottom-color:'+clr+'"'+drillAttr('day',d,'Actividades del '+dayLbl(d)+' '+fmtFechaCorta(DATA.dates[d]||''))+'><div class="day-n">'+dayLbl(d)+'</div><div class="day-d">'+fmtFechaCorta(DATA.dates[d]||'')+'</div><div class="day-v">'+p+'</div><div class="day-r" style="color:'+rclr+'">'+(rl?'↻ '+rl:'—')+'</div></div>';}
   var box=document.getElementById(boxId||'day-strip');if(box){box.innerHTML=h;box.style.gridTemplateColumns='repeat('+ND()+',1fr)';}
@@ -4052,7 +4099,7 @@ function renderPlaniInd(){
       +'<div class="pie-leg" id="leg-'+d.id+'-pl"></div></div>';
   }).join('');
   box.innerHTML=''
-    +'<div class="sttl">Resumen de la semana</div>'
+    +'<div class="sttl">Resumen de la semana'+((FILT.loc&&FILT.loc.length)?' · <span style="color:var(--na)">🏭 '+esc(FILT.loc.length<=2?FILT.loc.join(' + '):FILT.loc.length+' plantas')+'</span>':'')+'</div>'
     +'<div class="ch-row">'+pies+'</div>'
     +'<div class="bar-wrap"><div class="card-h"><div class="card-t">Dotación por Disciplina<span class="card-sub">plan acumulado · personas × turno</span></div>'
       +'<div class="seg"><button class="seg-b'+(DISC_MODE==='graf'?' on':'')+'" onclick="discMode(\'graf\')">Gráfico</button><button class="seg-b'+(DISC_MODE==='num'?' on':'')+'" onclick="discMode(\'num\')">Numérico</button></div></div>'
@@ -4065,7 +4112,7 @@ function renderPlaniInd(){
 }
 function plLeg(items){return items.map(function(i){return '<div class="li"'+(i.d?drillAttr(i.d[0],i.d[1],i.d[2]):'')+'><div class="ld" style="background:'+i.c+'"></div><span>'+i.t+'</span></div>';}).join('');}
 function plDrawPies(){
-  var acts=allActs();var tot=acts.length;
+  var acts=allActs().filter(plantaFilter);var tot=acts.length;
   var ec={'Completada':0,'En proceso':0,'Sin iniciar':0,'Quiebre':0};
   acts.forEach(function(a){if(isQuiebre(a)){ec['Quiebre']++;return;}var v=ed(a.id).estEj||'Sin iniciar';if(ec[v]===undefined)v='Sin iniciar';ec[v]++;});
   var avgMida=tot?Math.round(acts.reduce(function(s,a){return s+(ed(a.id).mida||0);},0)/tot):0;
@@ -4755,7 +4802,7 @@ function archOpen(k){
     closeArch();
     HIST_VIEW=true;HIST_B=b;WSLOT=0;
     DATA=b.data;EDITS=(b.edits&&typeof b.edits==='object')?b.edits:{};b.edits=EDITS;
-    PPTINFO={};FLT='';CHFLT={type:null,val:null};FILT={disc:'',loc:'',crit:'',estado:''};DIA_INIT=false;
+    PPTINFO={};FLT='';CHFLT={type:null,val:null};FILT={disc:'',loc:[],crit:'',estado:'',planta:''};DIA_INIT=false;
     document.body.classList.remove('wk-next');
     showDash(true);
     showTab('plani');
@@ -4765,7 +4812,7 @@ function archOpen(k){
 /* Vuelve a la semana actual */
 function archClose(){
   if(!HIST_VIEW)return;
-  HIST_VIEW=false;HIST_B=null;DATA=null;EDITS={};PPTINFO={};FLT='';CHFLT={type:null,val:null};FILT={disc:'',loc:'',crit:'',estado:''};DIA_INIT=false;
+  HIST_VIEW=false;HIST_B=null;DATA=null;EDITS={};PPTINFO={};FLT='';CHFLT={type:null,val:null};FILT={disc:'',loc:[],crit:'',estado:'',planta:''};DIA_INIT=false;
   var pv=HIST_PREV||{};HIST_PREV=null;
   document.body.classList.remove('wk-hist');
   var sl=(pv.slot===1)?1:0;var d=Store.get(dataKey(sl),null);
