@@ -1878,7 +1878,8 @@ body.rep-open{overflow:hidden}
 
 <script>
 /* ╔══════════════════════════════════════════════════════════════════════╗
-   ║  SINFRA · SEGUIMIENTO MGA — versión simplificada                      ║
+   ║  SINFRA · SEGUIMIENTO MGA — versión simplificada · v35                ║
+   ║  (lee el programa semanal EQUANS «SEM#NN» con turnos TA/TC + PPT por nombre)  ║
    ║  1. Store (localStorage) · 2. Fusión de estados · 3. CLOUD (Supabase) ║
    ║  4. Usuario, turno, historial de acciones, traspasos, PPT             ║
    ║  5. Carga de programa (Excel/CSV/avances) · modelo de edición (ed)    ║
@@ -2278,16 +2279,40 @@ function parsePptx(buf){
     pos=(csize>0?off+csize:off+1);
   }
   var info={};
-  Object.keys(slides).forEach(function(k){
-    var blob=slideBlob(slides[k]);var pp=parseActInfo(blob);
+  Object.keys(slides).sort(function(a,b){return a-b;}).forEach(function(k){
+    var xml=slides[k];var paras=slideParas(xml);var blob=paras.join(' ').replace(/\s+/g,' ').trim();
+    var pp=parseActInfo(blob);
+    /* título de la lámina: primer párrafo «N.N Nombre de la actividad - ÁREA» (puede no ir primero) */
+    var title='';paras.forEach(function(p){if(title)return;var m=/^\s*(\d{1,2}\.\d{1,2})\s*(\S.*)$/.exec(p);if(m&&m[2].length>6){pp.id=pp.id||m[1];title=pptCleanTitle(p);}});
+    /* tabla ITEM · TIPO · UNIDAD · CANTIDAD → materiales */
+    {var items=[];slideTables(xml).forEach(function(rows){var hdr=-1,ci=-1,cu=-1,cq=-1;
+        rows.forEach(function(r,i){if(hdr>=0)return;var up=r.map(function(c){return c.toUpperCase();});var t=up.indexOf('TIPO');if(t<0)t=up.findIndex(function(c){return /DESCRIP|MATERIAL/.test(c);});if(t>=0&&up.join('|').indexOf('CANTIDAD')>=0){hdr=i;ci=t;cu=up.indexOf('UNIDAD');cq=up.findIndex(function(c){return /CANTIDAD/.test(c);});}});
+        if(hdr<0)return;rows.slice(hdr+1).forEach(function(r){var tx=(r[ci]||'').trim();if(!tx)return;var q=cq>=0?(r[cq]||'').trim():'',u=cu>=0?(r[cu]||'').trim():'';items.push(tx+(q?' · '+q:'')+(u?' '+u:''));});});
+      if(items.length)pp.mat=items.join('; ');}
     var key=pp.ot||pp.id;
     if(!key)return;
-    var cur=info[key]||{desc:'',ot:pp.ot,req:'',mat:'',vuln:'',id:pp.id};
+    var cur=info[key]||{desc:'',ot:pp.ot,req:'',mat:'',vuln:'',id:pp.id,title:'',src:'ppt',slides:[]};
     ['desc','ot','req','mat','vuln'].forEach(function(f){if((pp[f]||'').length>(cur[f]||'').length)cur[f]=pp[f];});
+    if(title&&title.length>(cur.title||'').length)cur.title=title;
+    cur.slides.push(+k);
     info[key]=cur;
     if(pp.id&&pp.id!==key&&!info[pp.id])info[pp.id]=cur;
   });
   return info;
+}
+function xmlUnesc(s){return s.replace(/[\u200B-\u200D\uFEFF]/g,'').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;|&apos;/g,"'").replace(/&#(\d+);/g,function(m,n){return String.fromCharCode(+n);});}
+/* párrafos (<a:p>) de la lámina, sin las tablas */
+function slideParas(xml){
+  var noTbl=xml.replace(/<a:tbl>[\s\S]*?<\/a:tbl>/g,' ');
+  var ps=noTbl.match(/<a:p>[\s\S]*?<\/a:p>/g)||[];
+  return ps.map(function(p){var ts=p.match(/<a:t>([\s\S]*?)<\/a:t>/g)||[];return xmlUnesc(ts.map(function(t){return t.replace(/<\/?a:t>/g,'');}).join('')).replace(/\s+/g,' ').trim();}).filter(Boolean);
+}
+/* tablas de la lámina → [[celda,…],…] por tabla */
+function slideTables(xml){
+  var out=[];(xml.match(/<a:tbl>[\s\S]*?<\/a:tbl>/g)||[]).forEach(function(t){
+    var rows=(t.match(/<a:tr\b[\s\S]*?<\/a:tr>/g)||[]).map(function(r){return (r.match(/<a:tc\b[\s\S]*?<\/a:tc>/g)||[]).map(function(c){var ts=c.match(/<a:t>([\s\S]*?)<\/a:t>/g)||[];return xmlUnesc(ts.map(function(x){return x.replace(/<\/?a:t>/g,'');}).join(' ')).replace(/\s+/g,' ').trim();});});
+    out.push(rows);});
+  return out;
 }
 function slideBlob(xml){
   var ts=xml.match(/<a:t>([\s\S]*?)<\/a:t>/g)||[];
@@ -2299,9 +2324,11 @@ function parseActInfo(s){
   var idm=/^\s*(\d+\.\d+)\b/.exec(s);
   var id=idm?idm[1]:'';
   var otm=/OT\s*:?\s*([0-9]{6,})/.exec(s);
-  var NX='(?:DESCRIPCI[ÓO]N|OT\\s*:|REQUERIMIENTOS?|MATERIALES|VULNERABILIDAD|$)';
-  function grab(lbl){var r=new RegExp(lbl+'\\s*:?\\s*([\\s\\S]*?)(?='+NX+')','i');var m=r.exec(s);return m?m[1].replace(/^[\s:|]+|[\s:|]+$/g,''):'';}
-  return {id:id,ot:otm?otm[1]:'',desc:grab('DESCRIPCI[ÓO]N'),req:grab('REQUERIMIENTOS?'),mat:grab('MATERIALES'),vuln:grab('VULNERABILIDAD\\w*')};
+  /* Las etiquetas se reconocen solo en MAYÚSCULAS (o Capitalizadas con «:»), para no cortar la
+     descripción cuando el texto dice «…traslado de materiales…» o «…cualquier vulnerabilidad…» */
+  var NX='(?:DESCRIPCI[ÓO]N|Descripci[óo]n\\s*:|OT\\s*:|REQUERIMIENTOS?|Requerimientos?\\s*:|MATERIALES|Materiales\\s*:|VULNERABILIDAD\\w*|Vulnerabilidad\\w*\\s*:|$)';
+  function grab(lbl){var r=new RegExp('(?:^|\\s)'+lbl+'\\s*:?\\s*([\\s\\S]*?)(?='+NX+')');var m=r.exec(s);return m?m[1].replace(/^[\s:|]+|[\s:|]+$/g,''):'';}
+  return {id:id,ot:otm?otm[1]:'',desc:grab('(?:DESCRIPCI[ÓO]N|Descripci[óo]n:)'),req:grab('(?:REQUERIMIENTOS?|Requerimientos?:)'),mat:grab('(?:MATERIALES|Materiales:)'),vuln:grab('(?:VULNERABILIDAD\\w*|Vulnerabilidad\\w*:)')};
 }
 function togglePptDetails(){var d=document.getElementById('ppt-details');var b=document.getElementById('det-btn');if(!d)return;var open=d.style.display!=='none';d.style.display=open?'none':'block';if(b)b.textContent=(open?'👁 Ver detalles (descripción, requerimientos y materiales)':'🙈 Ocultar detalles');}
 function showBusy(msg){var o=document.getElementById('busy');if(o){document.getElementById('busy-msg').textContent=msg||'Procesando…';o.style.display='flex';}}
@@ -2319,11 +2346,13 @@ function handlePptx(file){if(histGuard())return;
     setTimeout(function(){
       try{
         var info=parsePptx(ev.target.result);
-        var cnt=Object.keys(info).filter(function(k){return /^\d/.test(k);}).length||Object.keys(info).length;
+        var seenI={};var cnt=Object.keys(info).filter(function(k){var v=info[k];if(!v||seenI[v.id||k])return false;seenI[v.id||k]=1;return true;}).length;
         if(!cnt){hideBusy();toast('No se reconocieron actividades en el PPT');return;}
         PPTINFO=info;
         var okEl=document.getElementById('u-ppt-ok');if(okEl)okEl.textContent='✓ PPT cargado: '+cnt+' actividades reconocidas';
-        if(DATA){savePpt();mergePpt();refreshAll();logAction('PPT vinculado','',file.name+' · '+cnt+' actividades reconocidas');if(editId&&document.getElementById('mo').classList.contains('open'))openEdit(editId);hideBusy();toast('✓ PPT vinculado ('+cnt+' actividades)');}
+        if(DATA){savePpt();if(DATA.ext)allActs().forEach(function(a){if(a.pptInfo)delete a.pptInfo.pptLinked;});var nl=mergePpt();refreshAll();
+          var msg=(DATA.ext?(nl||0)+' actividades del Excel complementadas desde '+cnt+' láminas':cnt+' actividades reconocidas');
+          logAction('PPT vinculado','',file.name+' · '+msg);if(editId&&document.getElementById('mo').classList.contains('open'))openEdit(editId);hideBusy();toast('✓ PPT vinculado · '+msg);}
         else{hideBusy();toast('✓ PPT leído ('+cnt+' act.). Ahora sube el Excel.');}
       }catch(e){hideBusy();toast('Error procesando el PPT: '+(e.message||'formato no válido'));}
     },40);
@@ -2338,6 +2367,7 @@ function initOTcrit(){
 }
 function mergePpt(){
   if(!DATA)return;
+  if(DATA.ext)return mergePptExt();
   allActs().forEach(function(a){
     var ot=actOT(a);var info=(ot&&PPTINFO[ot])?PPTINFO[ot]:PPTINFO[a.id];
     if(!info)return;
@@ -2345,6 +2375,32 @@ function mergePpt(){
     var e=ed(a.id);
     if(!e.ot&&info.ot)e.ot=info.ot;
   });
+}
+/* Programa EXTENDIDA: el Excel manda. Las láminas del PPT se asocian por nombre de
+   actividad (sus números no coinciden con el Excel) y solo complementan: descripción,
+   requerimientos, materiales y OT. Las láminas sin actividad en el Excel se ignoran. */
+function mergePptExt(){
+  if(!DATA)return 0;
+  /* entradas del PPT bajo «ppt:…» para que su numeración no choque con los ID del Excel */
+  var moved=false;Object.keys(PPTINFO).forEach(function(k){var v=PPTINFO[k];if(v&&v.src==='ppt'&&k.indexOf('ppt:')!==0){delete PPTINFO[k];if(!PPTINFO['ppt:'+k])PPTINFO['ppt:'+k]=v;moved=true;}});
+  if(moved)savePpt();
+  var pend=allActs().filter(function(a){return !(a.pptInfo&&a.pptInfo.pptLinked);});
+  if(!pend.length)return 0;
+  var map=pptMatchByName(PPTINFO),n=0,chg=false;
+  pend.forEach(function(a){
+    var ot=actOT(a);var info=map[a.id]||(ot&&PPTINFO[ot]&&PPTINFO[ot].src==='ppt'?PPTINFO[ot]:null)||(ot&&PPTINFO['ppt:'+ot])||null;
+    if(!info)return;
+    var base=a.pptInfo||{desc:'',req:'',mat:'',vuln:'',ot:a.ot||'',src:'excel'};
+    if(base.xls===undefined)base.xls=base.desc||'';
+    base.desc=base.xls+(info.desc?(base.xls?'  ·  ':'')+'PPT: '+info.desc:'');
+    if(info.req)base.req=info.req;if(info.mat)base.mat=info.mat;if(info.vuln)base.vuln=info.vuln;
+    if(!base.ot&&info.ot)base.ot=info.ot;
+    base.pptTitle=info.title||'';base.pptId=info.id||'';base.pptSlides=(info.slides||[]).slice();base.pptLinked=true;
+    a.pptInfo=base;chg=true;n++;
+    var e=ed(a.id);if(!e.ot&&info.ot)e.ot=info.ot;
+  });
+  if(chg)Store.set(dataKey(),DATA);
+  return n;
 }
 function splitItems(txt){
   if(!txt)return [];
@@ -2513,6 +2569,8 @@ function handleFile(file){
   if(ext==='csv'){r.onload=function(e){prog('Procesando…',60);try{parseCSV(e.target.result,file.name);prog('Listo!',100);setTimeout(showDash,250);}catch(err){toast('Error: '+err.message);hideProg();}};r.readAsText(file,'UTF-8');}
   else{r.onload=function(e){prog('Procesando Excel…',60);try{var wb=XLSX.read(e.target.result,{type:'array',cellDates:true});
     if(isMgaWb(wb)){parseMGA(wb,file.name);}
+    else if(semTurnosSheet(wb)){parseSemTurnos(wb,semTurnosSheet(wb),file.name);}
+    else if(extSheetName(wb)){parseExtendida(wb,file.name);}
     else{var raw=pickProgramSheet(wb);if(isAvancesFmt(raw))parseAvances(raw,file.name);else parseRows(raw,file.name);}
     prog('Listo!',100);setTimeout(showDash,250);}catch(err){toast('Error: '+err.message);hideProg();}};r.readAsArrayBuffer(file);}
 }
@@ -2528,6 +2586,8 @@ function pickProgramSheet(wb){
     return false;
   }
   var names=wb.SheetNames||[];
+  /* hojas ocultas al final: la pestaña visible es la que se está usando */
+  try{var hid={};((wb.Workbook||{}).Sheets||[]).forEach(function(s,i){if(s&&s.Hidden)hid[names[i]]=1;});names=names.filter(function(n){return !hid[n];}).concat(names.filter(function(n){return hid[n];}));}catch(e){}
   /* 1º: hojas cuyo nombre indica el programa semanal */
   var pref=names.filter(function(n){return /^\s*SEM/i.test(n);});
   for(var i=0;i<pref.length;i++){var raw=rowsOf(pref[i]);if(looksProgram(raw)||isAvancesFmt(raw))return raw;}
@@ -3946,6 +4006,271 @@ function parseMGA(wb,filename){
   Store.set(dataKey(),DATA);
   Store.set('edits_s'+sm,EDITS);
   if(typeof NPACTS!=='undefined'){NPACTS=[];if(typeof saveNP==='function')saveNP();}
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   PROGRAMA SEMANAL EQUANS · hoja «SEM#NN» con turnos (TA/TC por día)
+   · Fila FECHAS con la fecha de cada día · fila ID con TA2/TC2… (dotación)
+     a la izquierda de «Orden» y TA/TC (horas por turno) a la derecha.
+   · Secciones: ID entero (o «-») + nombre. Actividades: cualquier fila con
+     nombre (ID numérico, «MGA» o sin ID → se numera dentro de la sección).
+   · Se ignoran OCULTAR y el bloque DOTACIÓN / DELTA / PERSONAL PLANIFICADO.
+   · El Excel manda; el PPT solo complementa por nombre (mergePptExt).
+   ══════════════════════════════════════════════════════════════════════ */
+function semTurnosSheet(wb){
+  var names=wb.SheetNames||[],hid={};
+  try{((wb.Workbook||{}).Sheets||[]).forEach(function(s,i){if(s&&s.Hidden)hid[names[i]]=1;});}catch(e){}
+  var cand=names.filter(function(n){return /^\s*SEM/i.test(n)&&!/EXTENDIDA/i.test(n);});
+  cand=cand.filter(function(n){return !hid[n];}).concat(cand.filter(function(n){return hid[n];}));
+  for(var i=0;i<cand.length;i++){
+    var raw=XLSX.utils.sheet_to_json(wb.Sheets[cand[i]],{header:1,raw:true,defval:''});
+    for(var r=0;r<Math.min(raw.length,10);r++){var row=raw[r]||[],n=0;for(var c=0;c<row.length;c++)if(/^T[AC]\d?$/i.test(ct2(row[c])))n++;if(n>=12)return cand[i];}
+  }
+  return null;
+}
+function _semNum(v){ /* «1y4», «2 y 3» → suma de los números; 3 → 3 */
+  if(typeof v==='number')return v;var s=ct2(v);if(!s)return 0;var m=s.match(/\d+(?:[.,]\d+)?/g);if(!m)return 0;var t=0;m.forEach(function(x){t+=parseFloat(x.replace(',','.'));});return t;
+}
+function parseSemTurnos(wb,sh,filename){
+  var raw=XLSX.utils.sheet_to_json(wb.Sheets[sh],{header:1,raw:true,defval:''});
+  var fmt=XLSX.utils.sheet_to_json(wb.Sheets[sh],{header:1,raw:false,defval:''});
+  var title=ct2((raw[0]||[])[0]);
+  var weekRaw='';for(var r0=0;r0<6;r0++){var t0=ct2((raw[r0]||[])[0]);if(/SEMANA\s*\d+/i.test(t0)){weekRaw=t0;break;}}
+  var sm=(weekRaw.match(/SEMANA\s*(\d+)/i)||[])[1]||'';
+  var yr=(weekRaw.match(/(20\d{2})/)||[])[1]||String(new Date().getFullYear());
+  /* 1) fila ID con los turnos */
+  var hr=-1,r,c;
+  for(r=0;r<Math.min(raw.length,12);r++){var rw=raw[r]||[];if(ct2(rw[0]).toUpperCase()==='ID'){var n=0;for(c=0;c<rw.length;c++)if(/^T[AC]\d?$/i.test(ct2(rw[c])))n++;if(n>=12){hr=r;break;}}}
+  if(hr<0)throw new Error('la hoja «'+sh+'» no tiene la fila ID con los turnos TA/TC');
+  var H=raw[hr];
+  function colOf(re){for(var j=0;j<H.length;j++){if(re.test(ct2(H[j]).toUpperCase()))return j;}return -1;}
+  var cOT=colOf(/^ORDEN/),cList=colOf(/^NOMBRE LISTADO/),cUbi=colOf(/^UBICACI/),cArea=colOf(/^[ÁA]REA/),cEjec=colOf(/^EJECUTOR/),cSup=colOf(/^SUPERVISOR/),cOrig=colOf(/^PL\s*\/\s*NP|^ORIGEN/),cConc=colOf(/^CONCLUIDO/);
+  var cCrit=-1;for(r=0;r<hr;r++){var rwc=raw[r]||[];for(c=0;c<rwc.length;c++)if(/^CRITICIDAD/i.test(ct2(rwc[c]))){cCrit=c;break;}if(cCrit>=0)break;}
+  if(cOT<0)cOT=24;
+  var dotCols=[],hrCols=[];
+  for(c=0;c<H.length;c++){var lb=ct2(H[c]).toUpperCase();if(!/^T[AC]\d?$/.test(lb))continue;var o={c:c,t:lb.charAt(1)};if(c<cOT)dotCols.push(o);else hrCols.push(o);}
+  /* día = posición del par TA/TC dentro del bloque */
+  function pairDays(list){var d=-1;list.forEach(function(o){if(o.t==='A')d++;else if(d<0)d=0;o.d=d;});}
+  pairDays(dotCols);pairDays(hrCols);
+  var N=0;dotCols.forEach(function(o){N=Math.max(N,o.d+1);});if(!N)throw new Error('sin columnas de dotación TA/TC');
+  /* 2) fechas: fila con ≥ N fechas sobre el encabezado */
+  var dates=[];
+  for(r=0;r<hr;r++){var rwd=raw[r]||[],ds=[];for(c=0;c<rwd.length;c++){var v=rwd[c];var d=(v instanceof Date&&!isNaN(v))?v:((typeof v==='number'&&v>40000&&v<80000)?new Date(Math.round((v-25569)*86400000)):null);if(d)ds.push(d);}
+    if(ds.length>=N){dates=ds.slice(0,N).map(function(d){return pad2(d.getUTCDate())+'/'+pad2(d.getUTCMonth()+1)+'/'+d.getUTCFullYear();});break;}}
+  if(dates.length<N){ /* respaldo: lunes de la semana ISO */
+    var d0=dates.length?null:(function(){var s=new Date(Date.UTC(+yr,0,4));var day=s.getUTCDay()||7;s.setUTCDate(s.getUTCDate()-day+1+((+sm||1)-1)*7);return s;})();
+    dates=[];for(var i=0;i<N;i++){var dd=new Date(d0.getTime()+i*86400000);dates.push(pad2(dd.getUTCDate())+'/'+pad2(dd.getUTCMonth()+1)+'/'+dd.getUTCFullYear());}
+  }
+  var hT=7;
+  var zeros=function(){var a=[];for(var i=0;i<N;i++)a.push(0);return a;};
+  /* 3) secciones y actividades */
+  var secs=[],cur=null,curNum='',seen={},nAct=0,skipBlock=false;
+  EDITS={};
+  function nextId(){var mx=0;(cur?cur.actividades:[]).forEach(function(a){var m=new RegExp('^'+curNum.replace('.','\\.')+'\\.(\\d+)$').exec(a.id);if(m)mx=Math.max(mx,+m[1]);});return curNum+'.'+(mx+1);}
+  for(r=hr+1;r<raw.length;r++){
+    var row=raw[r]||[],frow=fmt[r]||[];
+    var c0=ct2(frow[0]!==''&&frow[0]!==undefined?frow[0]:row[0]),c1=ct2(row[1]);
+    if(/^OCULTAR$/i.test(c0))continue;
+    if(!c0&&!c1)continue;
+    if(/^(DOTACI[ÓO]N|DELTA$|PERSONAL PLANIFICADO)/i.test(c1.toUpperCase())){skipBlock=true;continue;}
+    var hasDot=false;dotCols.forEach(function(o){if(_semNum(row[o.c])>0)hasDot=true;});
+    var isSecHdr=(/^\d{1,2}$/.test(c0)||c0==='-')&&c1&&!hasDot;
+    if(isSecHdr){skipBlock=false;var sid=/^\d{1,2}$/.test(c0)?c0:(curNum||String(secs.length+1));curNum=sid;
+      cur={id:String(secs.length+1),nombre:c1.replace(/\s+/g,' ').trim(),num:sid,actividades:[]};secs.push(cur);continue;}
+    if(/^\d{1,2}$/.test(c0)&&!c1)continue; /* «8» sin nombre */
+    if(skipBlock)continue;
+    var ejec=cEjec>=0?ct2(row[cEjec]):'',sup=cSup>=0?ct2(row[cSup]):'',area=cArea>=0?ct2(row[cArea]):'',orig=cOrig>=0?ct2(row[cOrig]).toUpperCase():'';
+    var listado=cList>=0?ct2(row[cList]):'',ubi=cUbi>=0?ct2(row[cUbi]):'',crit=cCrit>=0?ct2(row[cCrit]):'';
+    /* filas corridas (sección 4): EJECUTOR en col 3, CRITICO en col 4, supervisor en col 5, PL en col 6 */
+    if(/^(PL|NP)$/.test(ct2(row[6]).toUpperCase())&&!orig){area=ct2(row[2]);ejec=ct2(row[3]);crit=ct2(row[4]);sup=ct2(row[5]);orig=ct2(row[6]).toUpperCase();listado='';ubi='';}
+    if(!c1){ if(!(ejec||sup||hasDot))continue; c1=cur?cur.nombre.replace(/\s+/g,' ').trim():'Actividad'; if(sup)c1+=' · '+sup; }
+    if(!cur){cur={id:'1',nombre:'PROGRAMA',num:'1',actividades:[]};secs.push(cur);curNum='1';}
+    var id=c0;
+    if(!id||/^MGA$/i.test(id)||!/^\d+(\.\d+)?$/.test(id))id=nextId();
+    if(/^\d+$/.test(id))id=id+'.0';
+    var uid=id,dn=2;while(seen[uid])uid=id+'·'+(dn++);seen[uid]=1;
+    var dp=zeros(),dpA=zeros(),dpC=zeros(),hA=zeros(),hC=zeros(),hp=zeros();
+    dotCols.forEach(function(o){var v=_semNum(row[o.c]);if(!(v>0))return;dp[o.d]+=v;if(o.t==='C')dpC[o.d]+=v;else dpA[o.d]+=v;});
+    hrCols.forEach(function(o){var v=_semNum(row[o.c]);if(!(v>0)||o.d>=N)return;if(o.t==='C')hC[o.d]=v;else hA[o.d]=v;});
+    var hhTot=0;
+    for(var i=0;i<N;i++){if(dp[i]>0){var w=dpA[i]*(hA[i]||hT)+dpC[i]*(hC[i]||hT);hp[i]=Math.round(w/dp[i]*100)/100;hhTot+=w;}}
+    var otRaw=row[cOT];var ot=(typeof otRaw==='number')?String(Math.round(otRaw)):ct2(otRaw);if(!/\d{5,}/.test(ot))ot='';
+    var winIni=null,winFin=null;for(var d1=0;d1<N;d1++)if(dp[d1]>0){winIni=d1;break;}for(var d2=N-1;d2>=0;d2--)if(dp[d2]>0){winFin=d2;break;}
+    var esMga=/^MGA$/i.test(c0)||/\bMGA\b/i.test(listado)||/\bMGA\b/i.test(cur.nombre);
+    var a={id:uid,nombre:c1,planta:area,area:area,ejec:ejec,crit:crit,sup:sup,origen:(orig==='NP'?'NP':'PL'),ot:ot,
+      dp:dp,dr0:zeros(),hp:hp,dpA:dpA,dpC:dpC,disc:cur.nombre,tipoAct:(esMga?'MGA':(listado.indexOf('Plan')===0?'Plan matriz':'Programa')),listado:listado,ubicTec:ubi,
+      winIni:winIni,winFin:winFin,persTurno:dp.reduce(function(s,v){return s+v;},0),hhPlan:Math.round(hhTot)};
+    var descL=[];
+    if(winIni!=null)descL.push('Ventana: '+dates[winIni]+' → '+dates[winFin]);else descL.push('Sin dotación programada en la semana');
+    descL.push('Pers-turno: '+a.persTurno+' · HH: '+a.hhPlan+(esMga?' · MGA':''));
+    if(listado)descL.push(listado);if(ubi)descL.push('Ubic. técnica: '+ubi);
+    var conc=cConc>=0?ct2(row[cConc]):'';if(conc)descL.push('Concluido por: '+conc);
+    a.pptInfo={desc:descL.join('  ·  '),req:'',mat:'',vuln:'',ot:ot,src:'excel'};
+    cur.actividades.push(a);nAct++;
+    var e=ed(uid);if(ot&&!e.ot)e.ot=ot;
+  }
+  secs=secs.filter(function(s){return s.actividades.length;});
+  if(!nAct)throw new Error('la hoja «'+sh+'» no tiene actividades');
+  var MES=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+  var m0=parseInt(dates[0].slice(3,5),10)-1;
+  DATA={title:title||('Programa semana '+sm),semana:sm||('S-'+yr),anio:yr,mga:true,mgaLbl:MES[m0]+' '+yr+' · Sem '+sm,ext:true,
+    filename:filename,dates:dates,secs:secs,horasCol:-1,hT:hT,sheet:sh};
+  Store.set(dataKey(),DATA);
+  Store.set('edits_s'+DATA.semana,EDITS);
+  if(typeof NPACTS!=='undefined'){NPACTS=[];if(typeof saveNP==='function')saveNP();}
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   PROGRAMA SEMANAL EQUANS · hoja «SEM#NN EXTENDIDA» (respaldo si no hay hoja SEM#NN con turnos)
+   · Dotación por turno (TA/TC) por día, ventana multi-día (semanas 46 y 47…)
+   · Secciones «N · NOMBRE», actividades con ID, ubicación, área, ejecutor,
+     OT, origen (IP24 / MGA / Programa), inicio y fin por turno.
+   · El Excel manda; el PPT solo complementa (ver mergePpt / pptMatchByName).
+   ══════════════════════════════════════════════════════════════════════ */
+function extSheetName(wb){
+  var names=wb.SheetNames||[],f=null;
+  names.forEach(function(n){if(!f&&/^\s*SEM.*EXTENDIDA/i.test(n))f=n;});
+  if(!f)names.forEach(function(n){if(!f&&/EXTENDIDA/i.test(n))f=n;});
+  return f;
+}
+function _extNorm(v){return ct2(v).toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'');}
+/* «09-11 A» → {dd,mm,t}  ·  también «Lun 09-11» */
+function _extShiftLbl(v){var m=/(\d{1,2})-(\d{1,2})\s*([AC])?\b/.exec(ct2(v));if(!m)return null;return {dd:+m[1],mm:+m[2],t:(m[3]||'').toUpperCase()};}
+function _extId(v){
+  if(v===null||v===undefined||v==='')return '';
+  if(typeof v==='number'){var s=String(Math.round(v*100)/100);return s;}
+  return ct2(v);
+}
+function parseExtendida(wb,filename){
+  var sh=extSheetName(wb);
+  var rows=XLSX.utils.sheet_to_json(wb.Sheets[sh],{header:1,raw:true,defval:''});
+  var title=ct2((rows[0]||[])[0]);
+  var yr=(title.match(/(20\d{2})/)||[])[1]||String(new Date().getFullYear());
+  var sm=(title.match(/SEMANA\s*(\d+)/i)||[])[1]||'';
+  /* 1) fila de encabezado (col A = ID, col B = ACTIVIDAD) */
+  var hr=-1,r,c;
+  for(r=0;r<Math.min(rows.length,20);r++){var rw=rows[r]||[];if(_extNorm(rw[0])==='ID'&&/ACTIVIDAD/.test(_extNorm(rw[1]))){hr=r;break;}}
+  if(hr<0)throw new Error('la hoja «'+sh+'» no tiene la fila de encabezado (ID · ACTIVIDAD)');
+  var H=rows[hr]||[];
+  function colOf(re){for(var j=0;j<H.length;j++){if(re.test(_extNorm(H[j])))return j;}return -1;}
+  var cUbi=colOf(/^UBICACI/),cArea=colOf(/^AREA/),cEjec=colOf(/^EJECUTOR/),cOT=colOf(/^OT/),cOrig=colOf(/^ORIGEN/),
+      cPers=colOf(/^PERS/),cHH=colOf(/^HH/),cIni=colOf(/^INICIO/),cFin=colOf(/^FIN/),cSemAct=colOf(/^SEMANA$/),cObs=colOf(/^OBSERVACI/);
+  var firstShift=(cOrig>=0?cOrig:6)+1, lastShift=(cPers>=0?cPers:H.length)-1;
+  /* 2) columnas de turno: fila bajo el encabezado con «dd-mm A/C» */
+  var shiftRow=-1;
+  for(r=hr+1;r<Math.min(rows.length,hr+8);r++){var rw2=rows[r]||[];var n=0;for(c=firstShift;c<=lastShift;c++){var p=_extShiftLbl(rw2[c]);if(p&&p.t)n++;}if(n>=6){shiftRow=r;break;}}
+  if(shiftRow<0)throw new Error('la hoja «'+sh+'» no tiene la fila de turnos (09-11 A, 09-11 C…)');
+  var cols=[],days=[],dayIdx={};
+  for(c=firstShift;c<=lastShift;c++){var p2=_extShiftLbl((rows[shiftRow]||[])[c]);if(!p2||!p2.t)continue;
+    var k=pad2(p2.dd)+'/'+pad2(p2.mm)+'/'+yr;
+    if(dayIdx[k]===undefined){dayIdx[k]=days.length;days.push(k);}
+    cols.push({c:c,d:dayIdx[k],t:p2.t});}
+  var N=days.length;
+  /* horas efectivas por turno: «HH (×7 h)» */
+  var hT=7;var hhHdr=_extNorm(H[cHH]||'');var hm=/(\d+(?:[.,]\d+)?)\s*H/.exec(hhHdr);if(hm){var hv=parseFloat(hm[1].replace(',','.'));if(hv>0&&hv<=12)hT=hv;}
+  function dIdxOf(v){var p=_extShiftLbl(v);if(!p)return null;var k=pad2(p.dd)+'/'+pad2(p.mm)+'/'+yr;return dayIdx[k]!==undefined?dayIdx[k]:null;}
+  /* 3) actividades y secciones */
+  var secs=[],cur=null,seen={},nAct=0,capacidad=null,dotPlan=null;
+  EDITS={};
+  var zeros=function(){var a=[];for(var i=0;i<N;i++)a.push(0);return a;};
+  for(r=hr+1;r<rows.length;r++){
+    var row=rows[r]||[];var c0=ct2(row[0]),c1=ct2(row[1]);
+    if(r===shiftRow||r===shiftRow-1||r===shiftRow-2)continue;
+    if(!c0&&!c1)continue;
+    var up0=_extNorm(c0);
+    /* pie de hoja: dotación planificada / capacidad */
+    if(/^DOTACI[OÓ]N PLANIFICADA/.test(up0)){dotPlan=cols.map(function(x){return +row[x.c]||0;});continue;}
+    if(/^CAPACIDAD/.test(up0)){capacidad=cols.map(function(x){return +row[x.c]||0;});continue;}
+    if(/^(DELTA|ACTIVIDADES EN EJECUCI|DOTACI[OÓ]N EQUANS|TURNO DE CORTE)/.test(up0))continue;
+    /* sección: «2 · ACTIVIDADES MECÁNICAS PIPING (MGA)» (col B vacía) */
+    var sm2=/^(\d{1,2}[A-Z]?)\s*[·\-–:]\s*(.+)$/.exec(c0);
+    if(sm2&&!c1){var nm=sm2[2].replace(/\s*[—–-]\s*el 1 marca.*$/i,'').trim();cur={id:sm2[1],nombre:nm,actividades:[]};secs.push(cur);continue;}
+    if(!c1)continue;
+    var id=_extId(row[0]);if(!id)continue;
+    if(!cur){cur={id:'0',nombre:'PROGRAMA',actividades:[]};secs.push(cur);}
+    var uid=id,dn=2;while(seen[uid])uid=id+'·'+(dn++);seen[uid]=1;
+    var dp=zeros(),dpA=zeros(),dpC=zeros(),hp=zeros();
+    cols.forEach(function(x){var v=+row[x.c];if(!(v>0))return;dp[x.d]+=v;if(x.t==='C')dpC[x.d]+=v;else dpA[x.d]+=v;});
+    for(var i=0;i<N;i++)if(dp[i]>0)hp[i]=hT;
+    var ubi=cUbi>=0?ct2(row[cUbi]):'',area=cArea>=0?ct2(row[cArea]):'',ejec=cEjec>=0?ct2(row[cEjec]):'';
+    var otRaw=cOT>=0?row[cOT]:'';var ot=(typeof otRaw==='number')?String(Math.round(otRaw)):ct2(otRaw);if(/^(N\/A|-|—)$/i.test(ot))ot='';
+    var origen=cOrig>=0?ct2(row[cOrig]):'';
+    var winIni=cIni>=0?dIdxOf(row[cIni]):null,winFin=cFin>=0?dIdxOf(row[cFin]):null;
+    if(winIni==null){for(var d1=0;d1<N;d1++)if(dp[d1]>0){winIni=d1;break;}}
+    if(winFin==null){for(var d2=N-1;d2>=0;d2--)if(dp[d2]>0){winFin=d2;break;}}
+    var pers=cPers>=0?(+row[cPers]||0):dp.reduce(function(s,v){return s+v;},0);
+    var hh=(cHH>=0&&+row[cHH]>0)?+row[cHH]:Math.round(pers*hT);
+    var semAct=cSemAct>=0?ct2(row[cSemAct]):'';
+    var obs=cObs>=0?ct2(row[cObs]):'';
+    var a={id:uid,nombre:c1,planta:area,area:ubi||area,ejec:ejec,crit:'',sup:'',origen:'PL',ot:ot,
+      dp:dp,dr0:zeros(),hp:hp,dpA:dpA,dpC:dpC,disc:cur.nombre,tipoAct:origen,fuente:origen,
+      winIni:winIni,winFin:winFin,persTurno:pers,hhPlan:hh,semProg:semAct};
+    var ini=cIni>=0?ct2(row[cIni]):'',fin=cFin>=0?ct2(row[cFin]):'';
+    var descL=[];
+    if(ini||fin)descL.push('Ventana: '+(ini||'—')+' → '+(fin||'—')+(semAct&&semAct!=='—'?' · Semana '+semAct:''));
+    else descL.push('Sin turno definido en el programa');
+    descL.push('Pers-turno: '+pers+' · HH: '+Math.round(hh)+(origen?' · Origen: '+origen:''));
+    if(ubi)descL.push('Ubicación: '+ubi);
+    if(obs)descL.push('Obs.: '+obs);
+    a.pptInfo={desc:descL.join('  ·  '),req:'',mat:'',vuln:'',ot:ot,src:'excel'};
+    cur.actividades.push(a);nAct++;
+    var e=ed(uid);if(ot&&!e.ot)e.ot=ot;
+  }
+  if(!nAct)throw new Error('la hoja «'+sh+'» no tiene actividades');
+  var MES=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+  var m0=parseInt(days[0].slice(3,5),10)-1;
+  var semKey=sm?sm:('EXT-'+yr+'-'+pad2(m0+1));
+  DATA={title:title||('Programa semana '+sm),semana:semKey,anio:yr,mga:true,mgaLbl:MES[m0]+' '+yr+' · Sem '+sm,ext:true,
+    filename:filename,dates:days,secs:secs,horasCol:-1,hT:hT,sheet:sh,capacidad:capacidad,dotPlan:dotPlan,
+    turnos:cols.map(function(x){return {d:x.d,t:x.t};})};
+  Store.set(dataKey(),DATA);
+  Store.set('edits_s'+semKey,EDITS);
+  if(typeof NPACTS!=='undefined'){NPACTS=[];if(typeof saveNP==='function')saveNP();}
+}
+
+/* ── Vinculación PPT ↔ Excel por nombre de actividad ──
+   El PPT de EQUANS numera sus láminas distinto al Excel, por eso se compara el
+   título de la lámina con «nombre + planta» de cada actividad (sin acentos, con
+   sinónimos y pesando más las palabras raras: el lugar pesa más que «MRT 2S Png»).
+   Si la lámina no calza con ninguna actividad del Excel, no se agrega: el Excel manda. */
+var _PPT_STOP={'DE':1,'DEL':1,'LA':1,'EL':1,'LOS':1,'LAS':1,'Y':1,'E':1,'EN':1,'A':1,'AL':1,'CON':1,'POR':1,'PARA':1,'UN':1,'UNA':1,'SE':1,'SU':1,'SUS':1,'MGA':1,'PREPARATIVO':1,'PREPARATIVOS':1,'CONTINUACION':1,'ESTA':1,'SEMANA':1,'FINALIZARAN':1,'PENDIENTES':1,'KM15':1,'KM':1,'15':1,'TRABAJOS':1,'SECTOR':1,'N':1,'AREA':1,'SEGREGADA':1,'CONTINUACION':1,'MTTO':1,'MANTENIMIENTO':1,'MANTENCION':1,'REALIZAR':1};
+var _PPT_SYN={'MAQ':'MAQUINA','MAQUINAS':'MAQUINA','MQ':'MAQUINA','DUCH':'DUCHA','DUCHAS':'DUCHA','FILTROS':'FILTRO','VALVULAS':'VALVULA','LINEAS':'LINEA','GRATINGS':'GRATING','INSTALACION':'INSTALAR','MONTAJE':'MONTAR','FABRICACION':'FABRICAR','ESCALERA':'ESCALA','ESCALERAS':'ESCALA','ESTANDARIZACION':'ESTANDARIZAR','REPARACION':'REPARAR','INSP':'INSPECCION','PNG':'PIPING','FLOT':'FLOTACION','FLOTA':'FLOTACION','CONV':'CONVENCIONAL','MCON':'CONVENCIONAL','MCONV':'CONVENCIONAL','REAC':'REACTIVOS','EMER':'EMERGENCIA','LAV':'LAVADO','INT':'INTERIOR','ESP':'ESPESADOR','ESP2':'ESPESADOR 2','ESP1':'ESPESADOR 1','SEC':'SECCION','CH':'CHANCADO','REP':'REPARAR','ESC':'ESCALA','ACC':'ACCESO','INF':'INFERIOR','EDG':'ESCALA GATO','MOBO':'MOBA','MOVILES':'MOVIL','HP':'CHANCADO','CHANCADORES':'CHANCADO','P':'PLANTA','PTA':'PLANTA','PISOS':'PISO','BARANDAS':'BARANDA','PELDANOS':'PELDANO'};
+function pptTokens(s){
+  var t=_extNorm(s).replace(/\([^)]*\)/g,' ').replace(/["“”]/g,' ').replace(/[^A-Z0-9]+/g,' ').trim().split(/\s+/);
+  var o={};
+  function add(w){if(!w||_PPT_STOP[w])return;if(w.length<2&&!/^\d$/.test(w))return;o[w]=1;}
+  t.forEach(function(w){if(!w)return;var m=_PPT_SYN[w];if(m){m.split(' ').forEach(add);}else add(w);});
+  return Object.keys(o);
+}
+function pptActText(a){return (a.nombre||'')+' '+(a.planta||'');}
+var _PPT_IDF=null;
+function pptIdfBuild(){ /* peso por rareza del término entre las actividades del Excel */
+  var df={},acts=allActs(),n=acts.length||1;
+  acts.forEach(function(a){pptTokens(pptActText(a)).forEach(function(w){df[w]=(df[w]||0)+1;});});
+  _PPT_IDF={n:n,df:df};
+}
+function pptW(w){var d=(_PPT_IDF&&_PPT_IDF.df[w])||0,n=(_PPT_IDF&&_PPT_IDF.n)||1;return Math.log(1+n/(d+0.5));}
+/* Jaccard ponderado por rareza */
+function pptSim(a,b){
+  var A=pptTokens(a),B=pptTokens(b);if(!A.length||!B.length)return 0;
+  var bi={};B.forEach(function(w){bi[w]=1;});
+  var wc=0,wa=0,wb=0;A.forEach(function(w){var x=pptW(w);wa+=x;if(bi[w])wc+=x;});B.forEach(function(w){wb+=pptW(w);});
+  var un=wa+wb-wc;return un>0?wc/un:0;
+}
+/* título de la lámina sin el prefijo numérico (el área final se conserva: ayuda a distinguir el lugar) */
+function pptCleanTitle(t){return ct2(t).replace(/^\s*\d{1,2}\.\d{1,2}\s*/,'').replace(/\s*:\s*$/,'').trim();}
+function pptMatchByName(info){
+  /* {actId: entradaPPT}: para cada actividad, la lámina más parecida si calza claramente
+     (≥0.45 y además ≥0.8 o 20 % mejor que la segunda). Una lámina puede servir a la misma
+     actividad repetida en las semanas 46 y 47. */
+  var acts=allActs(),out={};pptIdfBuild();
+  var entries=Object.keys(info).map(function(k){return info[k];}).filter(function(x){return x&&x.title;});
+  acts.forEach(function(a){
+    var txt=pptActText(a),b1=0,b2=0,best=null;
+    entries.forEach(function(p){var s=pptSim(p.title,txt);if(s>b1){b2=b1;b1=s;best=p;}else if(s>b2)b2=s;});
+    if(best&&b1>=0.45&&(b1>=0.8||b1>=1.2*b2))out[a.id]=best;
+  });
+  return out;
 }
 
 /* Solo se aceptan imágenes embebidas (data:image/…) como fuente de fotos */
