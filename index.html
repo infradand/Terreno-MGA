@@ -1144,7 +1144,8 @@ body.wk-next .tabs .tab.active{box-shadow:inset 0 -3px 0 #7c3aed}
   .tab{padding:12px 14px;font-size:13.5px}
   .fsel,.sb,.fi,select,input[type=text],input[type=number],textarea{font-size:16px!important}
   .qsel{font-size:13px;min-height:40px}
-  .mo .modal{max-height:96vh}
+  .mo .modal{max-height:none;overflow:visible} /* el panel crece con su contenido; el scroll lo hace la capa oscura */
+  .mo{padding:8px}
   .save-ind{padding:6px 10px}
   /* en celular la cabecera ocupaba media pantalla fija: ahora se desplaza y solo las pestañas quedan pegadas */
   .hdr{position:static}.tabs{top:0}
@@ -1878,7 +1879,7 @@ body.rep-open{overflow:hidden}
 
 <script>
 /* ╔══════════════════════════════════════════════════════════════════════╗
-   ║  SINFRA · SEGUIMIENTO MGA — versión simplificada · v35                ║
+   ║  SINFRA · SEGUIMIENTO MGA — versión simplificada · v36                ║
    ║  (lee el programa semanal EQUANS «SEM#NN» con turnos TA/TC + PPT por nombre)  ║
    ║  1. Store (localStorage) · 2. Fusión de estados · 3. CLOUD (Supabase) ║
    ║  4. Usuario, turno, historial de acciones, traspasos, PPT             ║
